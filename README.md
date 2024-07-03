@@ -79,3 +79,50 @@ You see you get URL: https://mijn.fluvius.be/verbruik/api/consumption-histories/
 - om: no idea
 - omvs: no idea
 - okgfc: no idea
+
+## Can I get my consumption spikes? (piekvermogen / capaciteitstarief)
+Yes! It is available under the url: https://mijn.fluvius.be/verbruik/api/consumption-spikes/54144882004XXXXXXX?historyFrom=2023-06-30T22:00:00Z&historyUntil=2024-07-07T22:00:00Z&granularity=3&asServiceProvider=false  
+Make sure to use your own EAN.
+
+## How does that output look?
+
+```
+[
+    {
+        "sn": "1SAG1100042062",
+        "mdf": "2019-09-26T22:00:00Z",
+        "mdu": "9999-12-30T23:00:00Z",
+        "val": [
+            {
+                "d": "2023-12-31T23:00:00Z",
+                "de": "2024-01-31T23:00:00Z",
+                "o": 5.09800000,
+                "ovs": 2,
+                "tscs": "2024-01-14T11:00:00Z",
+                "tecs": "2024-01-14T11:15:00Z"
+            }
+        ]
+    }
+]
+```
+
+## Yes, but what does it mean?
+
+- sn: Your meters serial number
+- mdf: manufacturing date?
+- mdu: manufacturing date until?
+- val: Here come the values
+- d: date
+- de: date end(?)
+- o: Peak usage in kW
+- ovs: no idea (could be version?)
+- tscs: Start timestamp this peak was measured
+- tecs: End timestamp this peak was measured
+
+
+## Can I use this to see other peoples usage if I know their EAN?
+NO, your user token only gives access to the meters you have access to in the portal. 
+This is something they did do right!
+
+## Is this legal?
+Probably? This gets the same results and output as logging in to the portal and seeing the results yourself and it does not bypass any restrictions or authentication.
