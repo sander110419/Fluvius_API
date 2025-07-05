@@ -1,128 +1,344 @@
-# Fluvius_API
+# Fluvius API - Complete Solution
 
-## What it is
-This is a simple python script that logs in to the mijn.fluvius.be portal and gets the authentication token you need to make requests to their API.
+A Python solution to authenticate with Fluvius (Belgian energy provider) and retrieve your energy consumption data programmatically, without needing a headless browser for API calls.
 
-## What it does
-It gets your usage details for the EAN (meter) number you provide in the code.
+## 🎯 What This Does
 
-## How does it work?
-Read the code, I added comments almost everywhere so it should be pretty much clear.
+- ✅ **Authenticates** with Fluvius using Azure B2C (one-time browser automation)
+- ✅ **Extracts Bearer token** for API access
+- ✅ **Retrieves consumption data** via REST API calls
+- ✅ **Analyzes energy usage** including solar injection
+- ✅ **No browser needed** for API calls after authentication
 
-## How can I expand or define the results I want?
-In your own browser, log in to mijn.fluvius.be.
-Open you developer console (F12) and open the nework tab.
+## 📋 Requirements
 
-When you are browsing your usage, check which requests are made to the api, for example:
-![image](https://github.com/sander110419/Fluvius_API/assets/13721836/a1546957-8db2-414c-b0bf-5522a208364b)
-
-You see you get URL: https://mijn.fluvius.be/verbruik/api/consumption-histories/54144882004XXXXXXX?historyFrom=2023-06-30T22:00:00Z&historyUntil=2024-07-07T22:00:00Z&granularity=3&asServiceProvider=false
-
-- historyFrom: should be self-explanatory.
-- historyUntil: should be self-explanatory.
-- granularity: some self definied fluvius variable setting the granularity of the data, but only "3" seems to work.
-- asServiceProvider: having it as true also changes nothing at all.
-
-## What does a response look like?
-
+```bash
+pip install selenium selenium-wire beautifulsoup4 requests
 ```
 
+You'll also need Chrome browser installed for the initial authentication.
+
+## 🚀 Quick Start
+
+### 1. Configuration
+
+Edit the credentials in `fluvius_api_solution.py`:
+
+```python
+# Your credentials and meter info
+FLUVIUS_LOGIN = "your.email@example.com"
+FLUVIUS_PASSWORD = "your_password"
+FLUVIUS_EAN = "your_ean_number"
+METER_SERIAL = "your_meter_serial"
+```
+
+### 2. Run the Solution
+
+```bash
+python fluvius_api_solution.py
+```
+
+This will:
+1. Authenticate and get your Bearer token
+2. Retrieve 7 days of consumption data
+3. Analyze and display your energy usage
+4. Save raw data to `fluvius_consumption_data.json`
+
+## 📊 API Usage
+
+### Get Bearer Token (One-time)
+
+```python
+from fluvius_api_solution import get_bearer_token
+
+# Authenticate once to get token
+token = get_bearer_token()
+print(f"Token: {token}")
+```
+
+### Get Consumption Data
+
+```python
+from fluvius_api_solution import get_consumption_data
+
+# Get consumption data for any period
+data = get_consumption_data(
+    bearer_token=token,
+    ean="541448820044159229",
+    meter_serial="1SAG1100042062",
+    days_back=30  # Last 30 days
+)
+```
+
+### Analyze Data
+
+```python
+from fluvius_api_solution import analyze_consumption_data
+
+# Get human-readable analysis
+analyze_consumption_data(data)
+```
+
+## 🔌 API Endpoints
+
+### Meter Measurement History
+
+**Endpoint:** `GET /verbruik/api/meter-measurement-history/{ean}`
+
+**Parameters:**
+- `historyFrom`: Start date (format: `2025-06-30T00:00:00.000+02:00`)
+- `historyUntil`: End date (format: `2025-07-06T23:59:59.999+02:00`)
+- `granularity`: `3` (daily data)
+- `asServiceProvider`: `false`
+- `meterSerialNumber`: Your meter serial number
+
+**Headers:**
+- `Authorization`: `Bearer {your_token}`
+- `Accept`: `application/json`
+
+**Example Response:**
+```json
 [
-    {
-        "sn": "1SAGXXXXXXX",
-        "mdf": "2019-09-26T22:00:00Z",
-        "mdu": "9999-12-30T23:00:00Z",
-        "val": [
-            {
-                "dt": false,
-                "d": "2023-06-30T22:00:00Z",
-                "de": "2023-07-01T22:00:00Z",
-                "oh": 0.00000000,
-                "ohvs": 2,
-                "ol": 13.07700000,
-                "olvs": 2,
-                "ih": 0.00000000,
-                "ihvs": 2,
-                "il": 0.00000000,
-                "ilvs": 2,
-                "ok": 0,
-                "okvs": 0,
-                "om": 0,
-                "omvs": 0,
-                "okgcf": null
-            }
-        ]
-    }
+  {
+    "d": "2025-06-30T22:00:00Z",
+    "de": "2025-07-01T22:00:00Z",
+    "v": [
+      {
+        "dc": 1,
+        "t": 1,
+        "st": 0,
+        "v": 9.133,
+        "vs": 2,
+        "u": 3,
+        "gcuv": null
+      }
+    ]
+  }
+]
+```
+
+## 📖 Data Format Explanation
+
+### Daily Data Structure
+
+- `d`: Start date of the period
+- `de`: End date of the period  
+- `v`: Array of values (measurements)
+
+### Measurement Values
+
+- `dc`: Direction code
+  - `1` = Consumption (taking from grid)
+  - `2` = Injection (feeding into grid, e.g., solar panels)
+- `t`: Tariff type
+  - `1` = High tariff (peak hours)
+  - `2` = Low tariff (off-peak hours)
+- `v`: Value in kWh
+- `vs`: Value status (2 = valid)
+- `st`: Status
+- `u`: Unit (3 = kWh)
+
+### Example Analysis Output
+
+```
+📅 Day 1: 2025-06-30T22:00:00Z
+   ⚡ Consumption (High): 9.133 kWh
+   ⚡ Consumption (Low): 2.200 kWh
+   ☀️ Injection (High): 12.421 kWh
+   ☀️ Injection (Low): 0.000 kWh
+   📊 Total consumption: 11.333 kWh
+   📊 Total injection: 12.421 kWh
+   📊 Net consumption: -1.088 kWh
+```
+
+## 🔧 Advanced Usage
+
+### Custom Date Range
+
+```python
+from datetime import datetime, timedelta
+
+# Get specific date range
+end_date = datetime(2025, 7, 1)
+start_date = end_date - timedelta(days=30)
+
+# Format dates for API
+history_from = start_date.strftime('%Y-%m-%dT00:00:00.000+02:00')
+history_until = end_date.strftime('%Y-%m-%dT23:59:59.999+02:00')
+
+# Make custom API call
+import requests
+url = f"https://mijn.fluvius.be/verbruik/api/meter-measurement-history/{ean}"
+response = requests.get(url, params={
+    'historyFrom': history_from,
+    'historyUntil': history_until,
+    'granularity': '3',
+    'asServiceProvider': 'false',
+    'meterSerialNumber': meter_serial
+}, headers={'Authorization': token})
+```
+
+### Process Multiple Meters
+
+```python
+meters = [
+    {"ean": "541448820044159229", "serial": "1SAG1100042062"},
+    {"ean": "541448820044159236", "serial": "1SAG1100042063"}
 ]
 
+for meter in meters:
+    print(f"Getting data for EAN: {meter['ean']}")
+    data = get_consumption_data(token, meter['ean'], meter['serial'])
+    # Process data...
 ```
 
-## Yes, but what does it mean?
-
-- sn: Your meters serial number
-- mdf: manufacturing date?
-- mdu: manufacturing date until?
-- val: Here come the values
-- dt: no idea
-- d: date
-- de: date end(?)
-- oh: "Afname Dag" (XXX High is my guess)
-- ohvs: no idea (could be version?)
-- ol: "Afname nacht" (XXX Low is my guess)
-- olvs: no idea (could be version?)
-- ih: "Injectie dag" (injection high?)
-- ihvs: no idea (could be version?)
-- il: "Injectie nacht" (injection low?)
-- ilvs: no idea (could be version?)
-- ok: no idea
-- okvs: no idea
-- om: no idea
-- omvs: no idea
-- okgfc: no idea
-
-## Can I get my consumption spikes? (piekvermogen / capaciteitstarief)
-Yes! It is available under the url: https://mijn.fluvius.be/verbruik/api/consumption-spikes/54144882004XXXXXXX?historyFrom=2023-06-30T22:00:00Z&historyUntil=2024-07-07T22:00:00Z&granularity=3&asServiceProvider=false  
-Make sure to use your own EAN.
-
-## How does that output look?
+## 📁 File Structure
 
 ```
-[
-    {
-        "sn": "1SAG1100042062",
-        "mdf": "2019-09-26T22:00:00Z",
-        "mdu": "9999-12-30T23:00:00Z",
-        "val": [
-            {
-                "d": "2023-12-31T23:00:00Z",
-                "de": "2024-01-31T23:00:00Z",
-                "o": 5.09800000,
-                "ovs": 2,
-                "tscs": "2024-01-14T11:00:00Z",
-                "tecs": "2024-01-14T11:15:00Z"
-            }
-        ]
+fluvius-api/
+├── fluvius_api_solution.py     # Main solution
+├── test_exact_api.py           # Test script
+├── fluvius_consumption_data.json  # Your data (generated)
+├── requirements.txt            # Dependencies
+└── README.md                   # This guide
+```
+
+## 🔍 Finding Your Meter Information
+
+### Your EAN Number
+- Login to https://mijn.fluvius.be
+- Go to "Verbruik" (Consumption)
+- Your EAN is displayed on the main page
+
+### Your Meter Serial Number
+- In the same section, look for meter details
+- Or check your physical meter
+- Format: Usually starts with letters like "1SAG"
+
+## 🛠️ Troubleshooting
+
+### Authentication Issues
+
+**Problem:** "No Bearer token found"
+```python
+# Solution: Check credentials and try again
+token = get_bearer_token()
+```
+
+**Problem:** "Authentication failed"
+- Verify your email and password are correct
+- Make sure you can login manually to mijn.fluvius.be
+- Check if you have 2FA enabled (not currently supported)
+
+### API Issues
+
+**Problem:** "400 Bad Request" with date validation errors
+```python
+# Solution: Ensure correct date format
+date_str = "2025-06-30T00:00:00.000+02:00"  # Correct format
+```
+
+**Problem:** "401 Unauthorized"
+```python
+# Solution: Token expired, get a new one
+token = get_bearer_token()
+```
+
+**Problem:** Empty data returned
+- Check if your EAN and meter serial are correct
+- Verify the date range (data might not be available for future dates)
+- Ensure your meter is active and reporting data
+
+### Browser Issues
+
+**Problem:** Selenium crashes
+```bash
+# Install Chrome and ChromeDriver
+# Ubuntu/Debian:
+sudo apt-get update
+sudo apt-get install google-chrome-stable
+
+# Or update Chrome to latest version
+```
+
+## 📈 Data Analysis Examples
+
+### Calculate Monthly Usage
+
+```python
+def calculate_monthly_stats(data):
+    total_consumption = 0
+    total_injection = 0
+    
+    for day in data:
+        for reading in day.get('v', []):
+            value = reading.get('v', 0)
+            if reading.get('dc') == 1:  # Consumption
+                total_consumption += value
+            elif reading.get('dc') == 2:  # Injection
+                total_injection += value
+    
+    net_usage = total_consumption - total_injection
+    return {
+        'consumption': total_consumption,
+        'injection': total_injection,
+        'net': net_usage
     }
-]
 ```
 
-## Yes, but what does it mean?
+### Export to CSV
 
-- sn: Your meters serial number
-- mdf: manufacturing date?
-- mdu: manufacturing date until?
-- val: Here come the values
-- d: date
-- de: date end(?)
-- o: Peak usage in kW
-- ovs: no idea (could be version?)
-- tscs: Start timestamp this peak was measured
-- tecs: End timestamp this peak was measured
+```python
+import csv
+from datetime import datetime
 
+def export_to_csv(data, filename='consumption.csv'):
+    with open(filename, 'w', newline='') as csvfile:
+        writer = csv.writer(csvfile)
+        writer.writerow(['Date', 'Type', 'Tariff', 'Value (kWh)'])
+        
+        for day in data:
+            date = day.get('d', '')
+            for reading in day.get('v', []):
+                direction = 'Consumption' if reading.get('dc') == 1 else 'Injection'
+                tariff = 'High' if reading.get('t') == 1 else 'Low'
+                value = reading.get('v', 0)
+                writer.writerow([date, direction, tariff, value])
+```
 
-## Can I use this to see other peoples usage if I know their EAN?
-NO, your user token only gives access to the meters you have access to in the portal. 
-This is something they did do right!
+## ⚠️ Important Notes
 
-## Is this legal?
-Probably? This gets the same results and output as logging in to the portal and seeing the results yourself and it does not bypass any restrictions or authentication.
+1. **Rate Limiting**: Don't make too many API calls in quick succession
+2. **Token Expiry**: Bearer tokens expire after some time (usually hours)
+3. **Data Availability**: Recent data might take time to appear
+4. **Time Zone**: All timestamps are in UTC, data periods are in local time (CET/CEST)
+5. **Privacy**: Keep your Bearer token secure and don't share it
+
+## 🔒 Security Best Practices
+
+- Store credentials in environment variables:
+```python
+import os
+FLUVIUS_LOGIN = os.getenv('FLUVIUS_LOGIN')
+FLUVIUS_PASSWORD = os.getenv('FLUVIUS_PASSWORD')
+```
+
+- Don't commit credentials to version control
+- Regenerate tokens regularly
+- Use HTTPS for all API calls (already implemented)
+
+## 📞 Support
+
+This is an unofficial solution. For official support:
+- Fluvius Customer Service: https://www.fluvius.be/contact
+- Official API: Check Fluvius developer portal (if available)
+
+## 📄 License
+
+This project is for educational and personal use only. Respect Fluvius's terms of service and rate limits.
+
+---
+
+**🎉 Enjoy your energy data!** 
+
+With this solution, you can now programmatically access your Fluvius consumption data, analyze your energy usage patterns, track your solar panel performance, and integrate with home automation systems.

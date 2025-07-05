@@ -1,5 +1,4 @@
-setuptools
-blinker<1.8.0
-selenium-wire
-selenium
-requests
+selenium==4.34.0
+selenium-wire==5.1.0
+beautifulsoup4==4.13.4
+requests>=2.25.0
