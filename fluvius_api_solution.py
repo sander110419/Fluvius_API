@@ -159,20 +159,41 @@ def analyze_consumption_data(data: Iterable[Dict[str, Any]]) -> None:
     for day_idx, day_data in enumerate(sample):
         date = day_data.get("d", "Unknown date")
         values = day_data.get("v", [])
-        print(f"\n📅 Day {day_idx + 1}: {date}")
+        
+        # Calculate effective date (Belgium time)
+        # API returns 23:00Z of previous day, which is 00:00 of the target day in BE
+        display_header = date
+        try:
+            if date.endswith("Z"):
+                dt = datetime.fromisoformat(date.replace("Z", "+00:00"))
+                # Adding 1 hour is enough to push 23:00Z to the next day (00:00)
+                effective_date = dt + timedelta(hours=1)
+                date_str = effective_date.strftime("%Y-%m-%d")
+                weekday = effective_date.strftime("%A")
+                display_header = f"{date_str} ({weekday})"
+        except ValueError:
+            pass
+
+        print(f"\n📅 Day {day_idx + 1}: {display_header}")
+        if display_header != date:
+            print(f"   (Raw start time: {date})")
 
         day_consumption = 0.0
         day_injection = 0.0
         for reading in values:
-            direction = reading.get("dc", 0)
-            tariff = reading.get("t", 0)
+            dc_val = reading.get("dc", 0)
+            t_val = reading.get("t", 0)
             value = float(reading.get("v", 0))
-            tariff_name = "High" if tariff == 1 else "Low"
+            
+            # Mapping based on user observation:
+            # t=1 => Consumption, t=2 => Injection
+            # dc=1 => High tariff, dc=2 => Low tariff
+            tariff_name = "High" if dc_val == 1 else "Low"
 
-            if direction == 1:
+            if t_val == 1:
                 day_consumption += value
                 print(f"   Consumption ({tariff_name}): {value:.3f} kWh")
-            elif direction == 2:
+            elif t_val == 2:
                 day_injection += value
                 print(f"   Injection ({tariff_name}): {value:.3f} kWh")
 
@@ -184,10 +205,6 @@ def analyze_consumption_data(data: Iterable[Dict[str, Any]]) -> None:
 
 def main() -> int:
     args = _parse_args()
-
-    print("=" * 60)
-    print("🏠 FLUVIUS API - HTTP-BASED SOLUTION")
-    print("=" * 60)
 
     try:
         access_token = request_access_token(args)

@@ -53,8 +53,10 @@ def example_export_to_csv():
                 end_date = day.get('de', '')
                 
                 for reading in day.get('v', []):
-                    direction = 'Consumption' if reading.get('dc') == 1 else 'Injection'
-                    tariff = 'High' if reading.get('t') == 1 else 'Low'
+                    # t=1 -> Consumption, t=2 -> Injection
+                    direction = 'Consumption' if reading.get('t') == 1 else 'Injection'
+                    # dc=1 -> High, dc=2 -> Low
+                    tariff = 'High' if reading.get('dc') == 1 else 'Low'
                     value = reading.get('v', 0)
                     status = reading.get('vs', 0)
                     
@@ -78,16 +80,16 @@ def example_monthly_summary():
         for day in data:
             for reading in day.get('v', []):
                 value = reading.get('v', 0)
-                direction = reading.get('dc', 0)
-                tariff = reading.get('t', 0)
+                dc_val = reading.get('dc', 0)
+                t_val = reading.get('t', 0)
                 
-                if direction == 1:  # Consumption
-                    if tariff == 1:  # High tariff
+                if t_val == 1:  # Consumption
+                    if dc_val == 1:  # High tariff
                         total_consumption_high += value
                     else:  # Low tariff
                         total_consumption_low += value
-                elif direction == 2:  # Injection
-                    if tariff == 1:  # High tariff
+                elif t_val == 2:  # Injection
+                    if dc_val == 1:  # High tariff
                         total_injection_high += value
                     else:  # Low tariff
                         total_injection_low += value

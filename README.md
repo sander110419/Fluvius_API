@@ -144,12 +144,12 @@ analyze_consumption_data(data)
 
 ### Measurement Values
 
-- `dc`: Direction code
-  - `1` = Consumption (taking from grid)
-  - `2` = Injection (feeding into grid, e.g., solar panels)
-- `t`: Tariff type
+- `dc`: Tariff type
   - `1` = High tariff (peak hours)
   - `2` = Low tariff (off-peak hours)
+- `t`: Direction code
+  - `1` = Consumption (taking from grid)
+  - `2` = Injection (feeding into grid, e.g., solar panels)
 - `v`: Value in kWh
 - `vs`: Value status (2 = valid)
 - `st`: Status
@@ -278,9 +278,9 @@ def calculate_monthly_stats(data):
     for day in data:
         for reading in day.get('v', []):
             value = reading.get('v', 0)
-            if reading.get('dc') == 1:  # Consumption
+            if reading.get('t') == 1:  # Consumption
                 total_consumption += value
-            elif reading.get('dc') == 2:  # Injection
+            elif reading.get('t') == 2:  # Injection
                 total_injection += value
     
     net_usage = total_consumption - total_injection
@@ -305,8 +305,8 @@ def export_to_csv(data, filename='consumption.csv'):
         for day in data:
             date = day.get('d', '')
             for reading in day.get('v', []):
-                direction = 'Consumption' if reading.get('dc') == 1 else 'Injection'
-                tariff = 'High' if reading.get('t') == 1 else 'Low'
+                direction = 'Consumption' if reading.get('t') == 1 else 'Injection'
+                tariff = 'High' if reading.get('dc') == 1 else 'Low'
                 value = reading.get('v', 0)
                 writer.writerow([date, direction, tariff, value])
 ```
