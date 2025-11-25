@@ -1,4 +1,6 @@
-# Fluvius API - Complete Solution
+[Now also available as a home assistant integration!](https://github.com/sander110419/Fluvius-home-assistant)
+
+# Fluvius API
 
 A Python solution to authenticate with Fluvius (Belgian energy provider) and retrieve your energy consumption data programmatically, without needing a headless browser for API calls.
 
