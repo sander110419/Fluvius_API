@@ -38,7 +38,17 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--granularity",
         default=os.getenv("FLUVIUS_GRANULARITY", "4"),
-        help="Fluvius API granularity value (3=quarter-hour, 4=daily).",
+        help="Fluvius API granularity value (1=15-min for single day, 3=quarter-hour, 4=daily).",
+    )
+    parser.add_argument(
+        "--weekly",
+        action="store_true",
+        help="Request weekly data with 15-minute granularity (sets --days-back=7 and --granularity=3).",
+    )
+    parser.add_argument(
+        "--hourly",
+        action="store_true",
+        help="Request yesterday's data with 15-minute intervals (sets --days-back=1 and --granularity=1).",
     )
     parser.add_argument(
         "--bearer-token",
@@ -57,6 +67,17 @@ def _parse_args() -> argparse.Namespace:
         parser.error("Missing --ean (or FLUVIUS_EAN)")
     if not args.meter_serial:
         parser.error("Missing --meter-serial (or FLUVIUS_METER_SERIAL)")
+
+    # Apply --weekly shortcut: 7 days of 15-minute data
+    if args.weekly:
+        args.days_back = 7
+        args.granularity = "3"
+
+    # Apply --hourly shortcut: single day with 15-minute intervals (yesterday by default)
+    if args.hourly:
+        args.days_back = 1
+        args.granularity = "1"
+
     return args
 
 
@@ -92,11 +113,18 @@ def _resolve_timezone(name: Optional[str]):
     return timezone.utc
 
 
-def _build_history_range(days_back: int, tz_name: Optional[str]) -> Dict[str, str]:
+def _build_history_range(days_back: int, tz_name: Optional[str], single_day: bool = False) -> Dict[str, str]:
     tzinfo = _resolve_timezone(tz_name)
     local_now = datetime.now(tzinfo)
     start_date = (local_now - timedelta(days=days_back)).replace(hour=0, minute=0, second=0, microsecond=0)
-    end_date = local_now.replace(hour=23, minute=59, second=59, microsecond=999000)
+    
+    if single_day:
+        # For single day requests (hourly mode), end on the same day as start
+        end_date = start_date.replace(hour=23, minute=59, second=59, microsecond=999000)
+    else:
+        # For multi-day requests, end today
+        end_date = local_now.replace(hour=23, minute=59, second=59, microsecond=999000)
+    
     return {
         "historyFrom": start_date.isoformat(timespec="milliseconds"),
         "historyUntil": end_date.isoformat(timespec="milliseconds"),
@@ -111,7 +139,9 @@ def get_consumption_data(
     tz_name: Optional[str] = "Europe/Brussels",
     granularity: str = "4",
 ) -> Optional[List[Dict[str, Any]]]:
-    date_range = _build_history_range(days_back, tz_name)
+    # For hourly mode (granularity=1), request only a single day
+    single_day = granularity == "1"
+    date_range = _build_history_range(days_back, tz_name, single_day=single_day)
 
     url = f"https://mijn.fluvius.be/verbruik/api/meter-measurement-history/{ean}"
     params = {
@@ -126,8 +156,9 @@ def get_consumption_data(
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
     }
 
+    day_label = "1 day" if single_day else f"{days_back} days"
     print(
-        f"Getting {days_back} days of consumption data (granularity={params['granularity']}, tz={date_range['historyFrom'][-6:]})..."
+        f"Getting {day_label} of consumption data (granularity={params['granularity']}, from={date_range['historyFrom'][:10]})..."
     )
     try:
         response = requests.get(url, params=params, headers=headers, timeout=30)
@@ -142,11 +173,11 @@ def get_consumption_data(
         print(f"Failed to parse JSON response: {exc}")
         return None
 
-    print(f"Successfully retrieved {len(data)} days of data")
+    print(f"Successfully retrieved {len(data)} records")
     return data
 
 
-def analyze_consumption_data(data: Iterable[Dict[str, Any]]) -> None:
+def analyze_consumption_data(data: Iterable[Dict[str, Any]], granularity: str = "4") -> None:
     sample = list(data)
     if not sample:
         print("No data to analyze")
@@ -154,9 +185,165 @@ def analyze_consumption_data(data: Iterable[Dict[str, Any]]) -> None:
 
     print("\nCONSUMPTION ANALYSIS:")
     print("=" * 50)
-    print(f"Period: {len(sample)} days")
+    
+    is_hourly = granularity == "1"
+    is_quarter_hour = granularity == "3"
+    
+    if is_hourly:
+        period_label = "15-min intervals"
+    elif is_quarter_hour:
+        period_label = "intervals"
+    else:
+        period_label = "days"
+    print(f"Period: {len(sample)} {period_label}")
 
-    for day_idx, day_data in enumerate(sample):
+    # For hourly data (single day, 15-min intervals), aggregate by hour
+    if is_hourly:
+        _analyze_hourly_data(sample)
+    # For quarter-hour data, aggregate by day first
+    elif is_quarter_hour:
+        _analyze_quarter_hour_data(sample)
+    else:
+        _analyze_daily_data(sample)
+
+
+def _analyze_hourly_data(data: List[Dict[str, Any]]) -> None:
+    """Analyze 15-minute interval data for a single day, aggregated by hour."""
+    from collections import defaultdict
+    
+    hourly_stats: Dict[str, Dict[str, float]] = defaultdict(lambda: {"consumption": 0.0, "injection": 0.0, "intervals": 0})
+    
+    for reading in data:
+        date_str = reading.get("d", "Unknown")
+        values = reading.get("v", [])
+        
+        # Parse date to get the hour
+        try:
+            if date_str.endswith("Z"):
+                dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+            else:
+                dt = datetime.fromisoformat(date_str)
+            # Convert to Belgium time (UTC+1 in winter, UTC+2 in summer)
+            effective_dt = dt + timedelta(hours=1)
+            hour_key = effective_dt.strftime("%Y-%m-%d %H:00")
+        except ValueError:
+            hour_key = date_str[:13] if len(date_str) >= 13 else date_str
+        
+        for val in values:
+            t_val = val.get("t", 0)
+            value = float(val.get("v", 0))
+            
+            if t_val == 1:
+                hourly_stats[hour_key]["consumption"] += value
+            elif t_val == 2:
+                hourly_stats[hour_key]["injection"] += value
+        
+        hourly_stats[hour_key]["intervals"] += 1
+    
+    total_consumption = 0.0
+    total_injection = 0.0
+    
+    print("\nHOURLY BREAKDOWN:")
+    for hour_key in sorted(hourly_stats.keys()):
+        stats = hourly_stats[hour_key]
+        consumption = stats["consumption"]
+        injection = stats["injection"]
+        intervals = stats["intervals"]
+        net = consumption - injection
+        
+        total_consumption += consumption
+        total_injection += injection
+        
+        # Format hour display
+        try:
+            dt = datetime.strptime(hour_key, "%Y-%m-%d %H:00")
+            hour_display = dt.strftime("%H:00-%H:59")
+        except ValueError:
+            hour_display = hour_key
+        
+        # Simple bar chart for consumption
+        bar_length = int(consumption * 10)  # Scale for display
+        bar = "█" * min(bar_length, 30)
+        
+        print(f"  ⏰ {hour_display}: {consumption:.3f} kWh (in) / {injection:.3f} kWh (out) {bar}")
+    
+    print("\n" + "=" * 50)
+    print("DAILY TOTALS:")
+    print(f"   Total consumption: {total_consumption:.3f} kWh")
+    print(f"   Total injection: {total_injection:.3f} kWh")
+    print(f"   Net consumption: {total_consumption - total_injection:.3f} kWh")
+
+
+def _analyze_quarter_hour_data(data: List[Dict[str, Any]]) -> None:
+    """Analyze 15-minute interval data, aggregated by day."""
+    from collections import defaultdict
+    
+    daily_stats: Dict[str, Dict[str, float]] = defaultdict(lambda: {"consumption": 0.0, "injection": 0.0, "intervals": 0})
+    
+    for reading in data:
+        date_str = reading.get("d", "Unknown")
+        values = reading.get("v", [])
+        
+        # Parse date to get the day
+        try:
+            if date_str.endswith("Z"):
+                dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+            else:
+                dt = datetime.fromisoformat(date_str)
+            # Convert to Belgium time (approximate by adding 1-2 hours)
+            effective_dt = dt + timedelta(hours=1)
+            day_key = effective_dt.strftime("%Y-%m-%d")
+        except ValueError:
+            day_key = date_str[:10] if len(date_str) >= 10 else date_str
+        
+        for val in values:
+            t_val = val.get("t", 0)
+            value = float(val.get("v", 0))
+            
+            if t_val == 1:
+                daily_stats[day_key]["consumption"] += value
+            elif t_val == 2:
+                daily_stats[day_key]["injection"] += value
+        
+        daily_stats[day_key]["intervals"] += 1
+    
+    total_consumption = 0.0
+    total_injection = 0.0
+    
+    for day_key in sorted(daily_stats.keys()):
+        stats = daily_stats[day_key]
+        consumption = stats["consumption"]
+        injection = stats["injection"]
+        intervals = stats["intervals"]
+        net = consumption - injection
+        
+        total_consumption += consumption
+        total_injection += injection
+        
+        # Try to get weekday
+        try:
+            dt = datetime.strptime(day_key, "%Y-%m-%d")
+            weekday = dt.strftime("%A")
+            display = f"{day_key} ({weekday})"
+        except ValueError:
+            display = day_key
+        
+        print(f"\n📅 {display} ({intervals} intervals)")
+        print(f"   Consumption: {consumption:.3f} kWh")
+        print(f"   Injection: {injection:.3f} kWh")
+        print(f"   Net: {net:.3f} kWh")
+    
+    print("\n" + "=" * 50)
+    print("WEEKLY TOTALS:")
+    print(f"   Total consumption: {total_consumption:.3f} kWh")
+    print(f"   Total injection: {total_injection:.3f} kWh")
+    print(f"   Net consumption: {total_consumption - total_injection:.3f} kWh")
+
+
+def _analyze_daily_data(data: List[Dict[str, Any]]) -> None:
+    """Analyze daily granularity data."""
+
+    for day_idx, day_data in enumerate(data):
         date = day_data.get("d", "Unknown date")
         values = day_data.get("v", [])
         
@@ -232,7 +419,7 @@ def main() -> int:
         json.dump(data, handle, indent=2)
     print(f"Raw data saved to {args.output}")
 
-    analyze_consumption_data(data)
+    analyze_consumption_data(data, args.granularity)
     return 0
 
 
