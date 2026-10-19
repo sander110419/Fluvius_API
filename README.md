@@ -43,10 +43,13 @@ python fluvius_api_solution.py ^
 
 Optional flags:
 - `--bearer-token <token>`: skip authentication and reuse an existing token
+- `--token-cache <path>`: cache OAuth tokens in a file (permissions `600`). Reuses the access token while valid, renews it via the refresh token grant (no password login) when expired, and only falls back to a full credential login when the refresh token is rejected. Recommended for scheduled/cron usage to avoid hammering the login flow (or set `FLUVIUS_TOKEN_CACHE`)
 - `--remember-me`: forwards the rememberMe flag to Fluvius
 - `--output <path>`: override the output JSON path (default `fluvius_consumption_data.json`)
 - `--timezone <IANA name>`: choose which timezone to use for `historyFrom`/`historyUntil` (default `Europe/Brussels` or `FLUVIUS_TIMEZONE`)
 - `--granularity <value>`: override the Fluvius granularity parameter (`3`=quarter-hour, `4`=daily; default `4` or `FLUVIUS_GRANULARITY`)
+
+`fluvius_fetch_token.py` also accepts `--refresh-token <token>` (or `FLUVIUS_REFRESH_TOKEN`) to mint a new access token via the refresh grant instead of a full login. Both scripts distinguish `FluviusCredentialsError` (Azure B2C explicitly rejected the username/password) from transient `FluviusAuthError` failures (network, throttling, portal changes), so calling scripts can tell a real password problem from a temporary hiccup.
 
 ### 2. Run the Solution
 

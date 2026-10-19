@@ -31,6 +31,14 @@ class FluviusAuthError(RuntimeError):
     """Raised when one of the HTTP steps fails."""
 
 
+class FluviusCredentialsError(FluviusAuthError):
+    """Raised when Azure B2C explicitly rejects the username/password."""
+
+
+class FluviusInvalidRefreshError(FluviusAuthError):
+    """Raised when the refresh token is rejected (invalid_grant)."""
+
+
 @dataclass
 class PKCEPair:
     verifier: str
@@ -117,12 +125,7 @@ class FluviusHttpAuthenticator:
         """Execute the full HTTP flow and return the token response."""
 
         metadata = self._fetch_msal_metadata()
-        authority = (metadata.get("authority") or metadata.get("auth", {}).get("authority") or DEFAULT_AUTHORITY).rstrip("/")
-        client_id = metadata.get("clientId") or metadata.get("auth", {}).get("clientId")
-        if not client_id:
-            raise FluviusAuthError("MSAL config does not expose a clientId")
-        redirect_uri = metadata.get("redirectUri") or metadata.get("auth", {}).get("redirectUri") or DEFAULT_REDIRECT_URI
-        scopes = _normalise_scopes(metadata)
+        authority, client_id, redirect_uri, scopes = self._resolve_msal_settings(metadata)
 
         pkce = _generate_pkce_pair()
         state = _random_urlsafe(32)
@@ -164,12 +167,45 @@ class FluviusHttpAuthenticator:
         token_response = self._exchange_code_for_tokens(authority, client_id, redirect_uri or redirect_seen, scopes, pkce.verifier, code)
         return token_response
 
+    def refresh(self, refresh_token: str) -> Dict[str, Any]:
+        """Exchange a refresh token for fresh tokens via a single token-endpoint call."""
+
+        metadata = self._fetch_msal_metadata()
+        authority, client_id, _, scopes = self._resolve_msal_settings(metadata)
+        token_url = f"{authority}/oauth2/v2.0/token"
+        data = {
+            "client_id": client_id,
+            "scope": scopes,
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+        }
+        self._log("Refreshing access token at the B2C token endpoint...")
+        resp = self.session.post(token_url, data=data, timeout=TIMEOUT)
+        if resp.status_code == 200:
+            try:
+                return resp.json()
+            except ValueError as exc:
+                raise FluviusAuthError("Token endpoint returned invalid JSON") from exc
+        if resp.status_code == 400 and "invalid_grant" in resp.text:
+            raise FluviusInvalidRefreshError("Refresh token was rejected (invalid_grant)")
+        raise FluviusAuthError(f"Token endpoint error during refresh ({resp.status_code}): {resp.text[:200]}")
+
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
     def _log(self, message: str) -> None:
         if self.verbose:
             print(message)
+
+    @staticmethod
+    def _resolve_msal_settings(metadata: Dict[str, Any]) -> Tuple[str, str, str, str]:
+        authority = (metadata.get("authority") or metadata.get("auth", {}).get("authority") or DEFAULT_AUTHORITY).rstrip("/")
+        client_id = metadata.get("clientId") or metadata.get("auth", {}).get("clientId")
+        if not client_id:
+            raise FluviusAuthError("MSAL config does not expose a clientId")
+        redirect_uri = metadata.get("redirectUri") or metadata.get("auth", {}).get("redirectUri") or DEFAULT_REDIRECT_URI
+        scopes = _normalise_scopes(metadata)
+        return authority, client_id, redirect_uri, scopes
 
     def _fetch_msal_metadata(self) -> Dict[str, Any]:
         self._log("Retrieving MSAL configuration...")
@@ -264,7 +300,7 @@ class FluviusHttpAuthenticator:
         data = resp.json()
         status_value = data.get("status")
         if str(status_value) not in {"200", "success"}:
-            raise FluviusAuthError(f"Credential submission failed: {data}")
+            raise FluviusCredentialsError(f"Credential submission failed: {data}")
 
     def _build_confirm_url(
         self,
@@ -341,17 +377,27 @@ def get_bearer_token_http(email: str, password: str, remember_me: bool = False, 
     return access_token, token_response
 
 
+def refresh_bearer_token_http(refresh_token: str, verbose: bool = True) -> Tuple[str, Dict[str, Any]]:
+    authenticator = FluviusHttpAuthenticator(verbose=verbose)
+    token_response = authenticator.refresh(refresh_token)
+    access_token = token_response.get("access_token")
+    if not access_token:
+        raise FluviusAuthError("Refresh response does not contain an access_token")
+    return access_token, token_response
+
+
 def _parse_cli() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Fetch a Fluvius bearer token using pure HTTP requests.")
     parser.add_argument("--email", default=os.getenv("FLUVIUS_LOGIN"), help="Fluvius account email (or set FLUVIUS_LOGIN)")
     parser.add_argument("--password", default=os.getenv("FLUVIUS_PASSWORD"), help="Fluvius account password (or set FLUVIUS_PASSWORD)")
     parser.add_argument("--remember-me", action="store_true", help="Set the rememberMe flag during login")
+    parser.add_argument("--refresh-token", default=os.getenv("FLUVIUS_REFRESH_TOKEN"), help="Use the refresh token grant instead of a full credential login (or set FLUVIUS_REFRESH_TOKEN)")
     parser.add_argument("--quiet", action="store_true", help="Suppress progress messages, only print the token")
     parser.add_argument("--json", action="store_true", help="Print the full token JSON response")
     args = parser.parse_args()
-    if not args.email:
+    if not args.refresh_token and not args.email:
         parser.error("Missing --email (or FLUVIUS_LOGIN)")
-    if not args.password:
+    if not args.refresh_token and not args.password:
         parser.error("Missing --password (or FLUVIUS_PASSWORD)")
     return args
 
@@ -359,12 +405,18 @@ def _parse_cli() -> argparse.Namespace:
 def main() -> int:
     args = _parse_cli()
     try:
-        access_token, token_response = get_bearer_token_http(
-            args.email,
-            args.password,
-            remember_me=args.remember_me,
-            verbose=not args.quiet,
-        )
+        if args.refresh_token:
+            access_token, token_response = refresh_bearer_token_http(
+                args.refresh_token,
+                verbose=not args.quiet,
+            )
+        else:
+            access_token, token_response = get_bearer_token_http(
+                args.email,
+                args.password,
+                remember_me=args.remember_me,
+                verbose=not args.quiet,
+            )
     except FluviusAuthError as err:
         print(f"Authentication failed: {err}", file=sys.stderr)
         return 1

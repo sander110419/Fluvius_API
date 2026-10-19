@@ -5,12 +5,18 @@ import argparse
 import json
 import os
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional
 
 import requests
 
-from fluvius_fetch_token import FluviusAuthError, get_bearer_token_http
+from fluvius_fetch_token import (
+    FluviusAuthError,
+    FluviusInvalidRefreshError,
+    get_bearer_token_http,
+    refresh_bearer_token_http,
+)
 
 try:  # Python 3.9+
     from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -54,11 +60,17 @@ def _parse_args() -> argparse.Namespace:
         "--bearer-token",
         help="Skip authentication and reuse an existing Bearer token (with or without the 'Bearer ' prefix).",
     )
+    parser.add_argument(
+        "--token-cache",
+        default=os.getenv("FLUVIUS_TOKEN_CACHE"),
+        help="Path to a token cache file: reuse the access token, refresh it when expired, "
+        "and only do a full credential login when the refresh token is rejected (or set FLUVIUS_TOKEN_CACHE).",
+    )
     parser.add_argument("--output", default="fluvius_consumption_data.json", help="Path to store the raw JSON response")
     parser.add_argument("--quiet", action="store_true", help="Reduce log noise while fetching the token")
 
     args = parser.parse_args()
-    if not args.bearer_token:
+    if not args.bearer_token and not args.token_cache:
         if not args.email:
             parser.error("Missing --email (or FLUVIUS_LOGIN)")
         if not args.password:
@@ -88,16 +100,60 @@ def _strip_bearer_prefix(token: str) -> str:
     return lowered
 
 
+def _load_token_cache(path: str) -> Optional[Dict[str, Any]]:
+    try:
+        with open(path, encoding="utf-8") as handle:
+            data = json.load(handle)
+        return data if isinstance(data, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+def _save_token_cache(path: str, access_token: str, tokens: Dict[str, Any]) -> None:
+    expires_in = int(tokens.get("expires_in", 3600))
+    data = {
+        "refresh_token": tokens.get("refresh_token"),
+        "access_token": access_token,
+        "access_expires_at": time.time() + max(0, expires_in - 60),
+    }
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(data, handle)
+    os.chmod(path, 0o600)
+
+
 def request_access_token(args: argparse.Namespace) -> str:
     if args.bearer_token:
         return _strip_bearer_prefix(args.bearer_token)
 
-    access_token, _ = get_bearer_token_http(
+    verbose = not args.quiet
+    cache_path = args.token_cache
+    cached = _load_token_cache(cache_path) if cache_path else None
+    if cached:
+        remaining = float(cached.get("access_expires_at") or 0.0) - time.time()
+        if cached.get("access_token") and remaining > 120:
+            if verbose:
+                print("Reusing cached access token...")
+            return cached["access_token"]
+        if cached.get("refresh_token"):
+            try:
+                access_token, tokens = refresh_bearer_token_http(cached["refresh_token"], verbose=verbose)
+            except FluviusInvalidRefreshError:
+                if verbose:
+                    print("Cached refresh token was rejected; falling back to full login...")
+            else:
+                _save_token_cache(cache_path, access_token, tokens)
+                return access_token
+
+    if not args.email or not args.password:
+        raise FluviusAuthError("Token cache expired or missing and no credentials provided")
+    access_token, tokens = get_bearer_token_http(
         args.email,
         args.password,
         remember_me=args.remember_me,
-        verbose=not args.quiet,
+        verbose=verbose,
     )
+    if cache_path:
+        _save_token_cache(cache_path, access_token, tokens)
     return access_token
 
 
